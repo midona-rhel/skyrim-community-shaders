@@ -1,5 +1,16 @@
 #include "Common/FrameBuffer.hlsli"
 #include "Common/VR.hlsli"
+#include "Common/SharedData.hlsli"
+
+#if defined(RAIN_FEATURE)
+#	if defined(LIGHT_LIMIT_FIX)
+#		include "LightLimitFix/LightLimitFix.hlsli"
+#	endif
+#	if defined(ISL) && defined(LIGHT_LIMIT_FIX)
+#		include "InverseSquareLighting/InverseSquareLighting.hlsli"
+#	endif
+#	include "Common/Color.hlsli"
+#endif
 
 struct VS_INPUT
 {
@@ -32,6 +43,9 @@ struct VS_OUTPUT
 	float CullDistance : SV_CullDistance0;  // p11
 	uint EyeIndex : EYEIDX0;
 #endif  // VR
+#if defined(RAIN_FEATURE) && defined(RAIN)
+	float3 WorldPosition : TEXCOORD2;  // World space position for lighting distance calculations
+#endif
 };
 
 #ifdef VSHADER
@@ -86,6 +100,9 @@ VS_OUTPUT main(VS_INPUT input)
 #	if defined(ENVCUBE)
 #		if defined(RAIN)
 	float2 positionOffset = input.TexCoord1.xy;
+#			if defined(RAIN_FEATURE)
+	positionOffset *= SharedData::rainSettings.RainWidth;
+#			endif
 #		else
 	float2x2 rotationMatrix = GetRotationMatrix(fVars0.w);
 	float2 positionOffset = mul(rotationMatrix, input.TexCoord1.xy) * ScaleAdjust + mul(rotationMatrix, input.TexCoord1.zw);
@@ -101,7 +118,11 @@ VS_OUTPUT main(VS_INPUT input)
 
 	float4 viewPosition = mul(WorldViewProj[eyeIndex], msPosition);
 #		if defined(RAIN)
-	float4 adjustedMsPosition = msPosition - float4(Velocity.xyz, 0);
+	float rainLengthScale = 1.0;
+#			if defined(RAIN_FEATURE)
+	rainLengthScale = SharedData::rainSettings.RainLength;
+#			endif
+	float4 adjustedMsPosition = msPosition - float4(Velocity.xyz * rainLengthScale, 0);
 	float positionBlendParam = 0.5 * (1 + input.TexCoord1.y);
 	float4 adjustedViewPosition = mul(WorldViewProj[eyeIndex], adjustedMsPosition);
 	float4 finalViewPosition = lerp(adjustedViewPosition, viewPosition, positionBlendParam);
@@ -110,6 +131,12 @@ VS_OUTPUT main(VS_INPUT input)
 #		endif
 	vsout.Position.xy = positionOffset + finalViewPosition.xy;
 	vsout.Position.zw = finalViewPosition.zw;
+
+#		if defined(RAIN_FEATURE) && defined(RAIN)
+	// Pass world position directly for lighting distance calculations
+	// msPosition.xyz is the particle's position in world space
+	vsout.WorldPosition = msPosition.xyz;
+#		endif
 
 	vsout.Color.xyz = 1.0.xxx;
 	vsout.Color.w = fVars1.w;
@@ -209,7 +236,10 @@ typedef VS_OUTPUT PS_INPUT;
 struct PS_OUTPUT
 {
 	float4 Color : SV_Target0;
-	float4 Normal : SV_Target1;
+#if defined(RAIN_FEATURE) && defined(RAIN)
+	float4 RainNormals : SV_Target3;
+	float4 RainLight : SV_Target4;
+#endif
 };
 
 #ifdef PSHADER
@@ -229,6 +259,11 @@ Texture2D<float4> TexGrayscaleTexture : register(t1);
 #	if defined(ENVCUBE)
 Texture2D<float4> TexPrecipitationOcclusionTexture : register(t2);
 Texture2D<float4> TexUnderwaterMask : register(t3);
+#	endif
+#	if defined(RAIN_FEATURE) && defined(RAIN)
+Texture2D<float4> TexRainNormals : register(t65);
+TextureCube<float3> EnvReflectionsTexture : register(t30);
+SamplerState SampEnvReflections : register(s14);
 #	endif
 
 cbuffer PerGeometry : register(b2)
@@ -275,8 +310,126 @@ PS_OUTPUT main(PS_INPUT input)
 
 	psout.Color.xyz = ColorScale * baseColor.xyz;
 	psout.Color.w = baseColor.w;
-	psout.Normal.w = baseColor.w;
-	psout.Normal.xyz = float3(0, 1, 0);
+
+#	if defined(RAIN_FEATURE)
+#		if defined(RAIN)
+	// Rain particles: output screen-space normals for refraction
+	// Don't draw the particle texture - only output to light/normal buffers
+	if (SharedData::rainSettings.EnableRain) {
+		float4 rainNormalSample = TexRainNormals.Sample(SampSourceTexture, input.TexCoord0);
+
+		// Discard if RG is near 0.5 (center of raindrop = no refraction, no visible rain)
+		float2 normalOffset = abs(rainNormalSample.rg - 0.5);
+		if (normalOffset.x < 0.01 && normalOffset.y < 0.01) {
+			discard;
+		}
+
+		// Don't draw the particle texture
+		psout.Color = float4(0, 0, 0, 0);
+
+		float2 screenSpaceNormal = rainNormalSample.rg;
+		float depth = input.Position.z / input.Position.w;
+		float mask = input.Color.w;
+		psout.RainNormals = float4(screenSpaceNormal, depth, mask);
+
+		// Calculate local light contribution
+		// Treat particles as geometry - the normal texture gives us the surface normal
+		// We work in view space since the normal is naturally screen-aligned
+		float3 lightColor = 0.0;
+
+		// Convert normal from [0,1] to [-1,1]
+		float2 normalDir = (screenSpaceNormal - 0.5) * 2.0;
+
+		// Reconstruct Z from sphere normal: x² + y² + z² = 1, so z = sqrt(1 - x² - y²)
+		float normalLenSq = dot(normalDir, normalDir);
+		float cosTheta = sqrt(saturate(1.0 - normalLenSq));
+
+		// Fresnel: F = F0 + (1-F0)(1-cosTheta)^power
+		float fresnelF0 = SharedData::rainSettings.FresnelF0;
+		float fresnelPower = SharedData::rainSettings.FresnelPower;
+		float fresnel = fresnelF0 + (1.0 - fresnelF0) * pow(1.0 - cosTheta, fresnelPower);
+
+		// Get strength multipliers from settings (UI values are 0-2, multiply by 2 for internal use)
+		float reflectionStrength = SharedData::rainSettings.ReflectionStrength * 2.0;
+		float specularPower = SharedData::rainSettings.SpecularPower;
+		float skyLightStrength = SharedData::rainSettings.SkyLightStrength * 2.0;
+
+		// Get world position of particle
+		float3 particleWorldPos = input.WorldPosition;
+
+		// Convert to view space for light calculations
+		float3 viewPositionVS = FrameBuffer::WorldToView(particleWorldPos, true, eyeIndex);
+
+		// Billboard normal: X = right, Y = up, Z = toward camera
+		// For reflection off a sphere facing camera, reflect (0,0,-1) around normal
+		float3 N = normalize(float3(normalDir.x, normalDir.y, cosTheta));
+		float3 reflectDir = reflect(float3(0, 0, -1), N);  // Reflect incoming view ray
+
+		// Transform reflection direction from view space to world space
+		// Fix coordinate mapping: negate X (mirrored), negate Y (upside down), negate Z (front/back)
+		float3 correctedDir = float3(-reflectDir.x, -reflectDir.y, -reflectDir.z);
+		float3 R = mul((float3x3)FrameBuffer::CameraViewInverse[eyeIndex], correctedDir);
+
+		// Sample environment cubemap for sky/environment reflection
+		float3 envColor = EnvReflectionsTexture.SampleLevel(SampEnvReflections, R, 0).rgb;
+		envColor = Color::GammaToLinear(envColor);
+		lightColor = envColor * fresnel * mask * skyLightStrength;
+
+#			if defined(LIGHT_LIMIT_FIX)
+		// Get screen UV for cluster lookup
+		float2 screenUV = input.Position.xy / SharedData::BufferDim.xy;
+
+		// Get light cluster
+		uint clusterIndex = 0;
+		if (LightLimitFix::GetClusterIndex(screenUV, abs(viewPositionVS.z), clusterIndex)) {
+			uint lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
+			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
+
+			[loop] for (uint i = 0; i < lightCount; i++)
+			{
+				uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
+				LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
+
+				if (LightLimitFix::IsLightIgnored(light) || (light.lightFlags & LightLimitFix::LightFlags::Shadow)) {
+					continue;
+				}
+
+				// Calculate distance in WORLD SPACE for proper attenuation
+				// This is the actual distance from particle to light
+				float3 toLightWS = light.positionWS[eyeIndex].xyz - particleWorldPos;
+				float lightDist = length(toLightWS);
+
+				// Get light direction in VIEW SPACE for N dot L calculation
+				// (since our normal N is in view space)
+				float3 lightPosVS = FrameBuffer::WorldToView(light.positionWS[eyeIndex].xyz, true, eyeIndex);
+				float3 toLightVS = lightPosVS - viewPositionVS;
+				float3 L = normalize(toLightVS);
+
+#				if defined(ISL)
+				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
+#				else
+				float intensityFactor = saturate(lightDist / light.radius);
+				float intensityMultiplier = 1.0 - intensityFactor * intensityFactor;
+#				endif
+
+				// Specular reflection only - no transmission/refraction component
+				// Reflection: bright highlight when light reflects toward camera
+				float3 R_spec = reflect(-L, N);
+				float RdotV = saturate(dot(R_spec, float3(0, 0, 1)));  // V in view space is (0,0,1)
+				float reflectSpecular = pow(RdotV, specularPower);
+
+				// Fresnel controls reflection intensity
+				float lighting = reflectSpecular * fresnel * reflectionStrength;
+
+				lightColor += light.color.xyz * intensityMultiplier * lighting;
+			}
+		}
+#			endif
+
+		psout.RainLight = float4(lightColor, mask);
+	}
+#		endif
+#	endif
 
 	return psout;
 }

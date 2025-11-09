@@ -7,7 +7,7 @@
 namespace SharedData
 {
 
-#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
+#if defined(VSHADER) || defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 	cbuffer SharedData : register(b5)
 	{
 		float4 WaterData[25];
@@ -194,6 +194,24 @@ namespace SharedData
 		float Strength;      // [0, 1.0] The inverse blend weight of the effect
 	};
 
+	struct RainSettings
+	{
+		bool EnableRain;
+		float RefractionStrength;
+		float RainWidth;
+		float RainLength;
+
+		float LightOpacity;
+		float FresnelPower;
+		float FresnelF0;
+		float IOR;
+
+		float ReflectionStrength;
+		float SpecularPower;
+		float SkyLightStrength;
+		float pad1;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -209,6 +227,7 @@ namespace SharedData
 		TerrainVariationSettings terrainVariationSettings;
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
+		RainSettings rainSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

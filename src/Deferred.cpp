@@ -8,6 +8,7 @@
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/IBL.h"
+#include "Features/Rain.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -670,6 +671,13 @@ void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 	func(a1);
 	state->inWorld = false;
 	state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
+
+	// Apply rain effects after world rendering (includes particles)
+	auto& rain = globals::features::rain;
+	if (rain.loaded) {
+		rain.ApplyFarRain();    // Far rain first (before refraction modifies the scene)
+		rain.ApplyRefraction();  // Then apply refraction distortion
+	}
 };
 
 void Deferred::Hooks::Main_RenderWorld_Start::thunk(RE::BSBatchRenderer* This, uint32_t StartRange, uint32_t EndRanges, uint32_t RenderFlags, int GeometryGroup)
@@ -725,6 +733,7 @@ void Deferred::Hooks::BSCubeMapCamera_RenderCubemap::thunk(RE::NiAVObject* camer
 void Deferred::Hooks::Main_RenderFirstPersonView::thunk(bool a1, bool a2)
 {
 	auto* const state = globals::state;
+
 	state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
 	func(a1, a2);
 	state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
@@ -739,6 +748,7 @@ void Deferred::Hooks::Renderer_ResetState::thunk(void* This)
 
 	ID3D11Buffer* buffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
 	context->PSSetConstantBuffers(4, 3, buffers);
+	context->VSSetConstantBuffers(6, 1, &buffers[2]);  // Bind featureDataCB to vertex shader for rain width
 	context->CSSetConstantBuffers(5, 2, buffers + 1);
 
 	auto* singleton = globals::truePBR;

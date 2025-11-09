@@ -15,6 +15,7 @@
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/Rain.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
@@ -209,6 +210,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::dynamicCubemaps,
 		&globals::features::cloudShadows,
 		&globals::features::waterEffects,
+		&globals::features::rain,
 		&globals::features::weatherPicker,
 		&globals::features::performanceOverlay,
 		&globals::features::subsurfaceScattering,

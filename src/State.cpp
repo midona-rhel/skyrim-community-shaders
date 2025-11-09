@@ -8,6 +8,7 @@
 #include "FeatureIssues.h"
 #include "Features/CloudShadows.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/Rain.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
@@ -24,6 +25,7 @@ void State::Draw()
 	auto& terrainBlending = globals::features::terrainBlending;
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
+	auto& rain = globals::features::rain;
 	auto truePBR = globals::truePBR;
 	auto context = globals::d3d::context;
 
@@ -33,6 +35,9 @@ void State::Draw()
 
 		if (cloudShadows.loaded)
 			cloudShadows.SkyShaderHacks();
+
+		if (rain.loaded)
+			rain.ParticleShaderHacks();
 
 		if (terrainHelper.loaded)
 			terrainHelper.SetShaderResouces(context);
