@@ -59,22 +59,20 @@ float3 LambertianDirectP(in float3 position, in float3 normal, in float3 albedo,
     uint lightIdx = min(uint(Random(randomSeed) * lightData.Count), lightData.Count - 1);
 
     uint lightID = lightData.GetID(lightIdx);
-    
+
     Light light = Lights[lightID];
-        
-    float3 lightVector = (light.Vector - position) * GAME_UNIT_TO_M;
-    float lightDistanceSqr = dot(lightVector, lightVector);
-    float lightDistance = sqrt(lightDistanceSqr);
-        
+
+    float3 lightVector = light.Vector - position;
+    float lightDistance = length(lightVector);
     lightVector /= lightDistance;
-         
-    float attenuation = 1.0 / max(lightDistanceSqr, 0.01);
-    float fade = saturate(1.0 - pow(lightDistance / light.Range, 4.0));
-            
-    float NdotL= saturate(dot(normal, lightVector)) * attenuation * fade * fade;
-    NdotL *= float(lightData.Count) * TraceRayShadowFinite(Scene, position, lightVector, lightDistance * M_TO_GAME_UNIT);
-            
-    return NdotL * light.Color * albedo * Frame.Diffuse; // (albedo / Math::PI)
+
+    // Use same linear attenuation as GGXDirectP for consistency
+    float attenuation = LinearAtten(lightDistance, light.Range);
+
+    float NdotL = saturate(dot(normal, lightVector)) * attenuation;
+    NdotL *= float(lightData.Count) * TraceRayShadowFinite(Scene, position, lightVector, lightDistance);
+
+    return NdotL * light.Color * albedo * Frame.Diffuse;
 }
 
 float3 LambertianIndirect(float3 position, float3 normal, float3 albedo, uint depth, inout uint randomSeed)

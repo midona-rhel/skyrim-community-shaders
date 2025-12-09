@@ -1734,9 +1734,13 @@ void Raytracing::UpdateInstances()
 
 		auto& firstShapeIndex = geometryData.shapes[0].registerIndex;
 
+		// Instance mask: bit 0 = static (DDGI probes), bit 1 = skinned/dynamic (screen GI)
+		// Static geometry: 0x03 (hit by both), Skinned: 0x02 (only screen GI)
+		uint8_t instanceMask = (geometryData.GetFlags() & Flags::Skinned) ? 0x02 : 0x03;
+
 		D3D12_RAYTRACING_INSTANCE_DESC blasInstance = {
 			.InstanceID = firstShapeIndex,
-			.InstanceMask = 1,
+			.InstanceMask = instanceMask,
 			.AccelerationStructure = geometryData.blasBuffer->GetGPUVirtualAddress()
 		};
 

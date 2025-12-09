@@ -83,8 +83,9 @@ namespace DX12
 
 			// Bias - Artifact Prevention
 			// Values should be 10-20% of probe spacing to prevent self-shadowing
-			float viewBias = 14.0f;    ///< Offset along view direction when sampling
-			float normalBias = 14.0f;  ///< Offset along surface normal when sampling
+			// Increased from 14.0f to reduce light leaking through thin geometry
+			float viewBias = 28.0f;    ///< Offset along view direction when sampling
+			float normalBias = 28.0f;  ///< Offset along surface normal when sampling
 
 			// Feature Toggles
 			bool probeRelocationEnabled = false;     ///< Move probes away from geometry (can cause light bleed)
@@ -94,7 +95,7 @@ namespace DX12
 			// Probe Relocation/Classification Thresholds
 			float probeMinFrontfaceDistance = 10.0f;       ///< Minimum distance from surfaces for relocation
 			float probeRandomRayBackfaceThreshold = 0.25f; ///< Backface ratio threshold for blending
-			float probeFixedRayBackfaceThreshold = 0.25f;  ///< Backface ratio threshold for classification
+			float probeFixedRayBackfaceThreshold = 0.5f;   ///< Backface ratio threshold for classification (increased from 0.25)
 
 			// Scrolling
 			float scrollForwardBias = 200.0f;  ///< Offset volume center ahead of camera (game units)

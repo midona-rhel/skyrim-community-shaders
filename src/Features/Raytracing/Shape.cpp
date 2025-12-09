@@ -159,6 +159,26 @@ void Shape::BuildMaterial(const RE::BSGeometry::GEOMETRY_RUNTIME_DATA& geometryR
 			if (auto& effectData = lightingShader->effectData) {
 				logger::info("[RT] CreateMaterial - Effect - Alpha: {}, Z Test Func: {}", effectData->alpha, magic_enum::enum_name(effectData->zTestFunc));
 			}
+
+			// Extract emissive color from property slot (most materials have it here, not in effect slot)
+			if (lightingShader->emissiveColor) {
+				effectColor = {
+					lightingShader->emissiveColor->red,
+					lightingShader->emissiveColor->green,
+					lightingShader->emissiveColor->blue,
+					lightingShader->emissiveMult
+				};
+			}
+
+			// Also check for glow map texture on property slot
+			if (auto shaderMaterial = lightingShader->material) {
+				if (shaderMaterial->GetFeature() == Feature::kGlowMap) {
+					const auto* lightingGlowMaterial = static_cast<RE::BSLightingShaderMaterialGlowmap*>(shaderMaterial);
+					if (lightingGlowMaterial) {
+						effectTexture = TryGetTexture(lightingGlowMaterial->glowTexture);
+					}
+				}
+			}
 		}
 
 		auto* effect = geometryRuntimeData.properties[State::kEffect].get();

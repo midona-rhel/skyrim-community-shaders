@@ -10,6 +10,11 @@
 #include "Common/Game.hlsli"
 #include "Common/Color.hlsli"
 
+// For DDGI probes, include irradiance sampling for multi-bounce
+#if defined(DDGI_PROBE)
+#include "Raytracing/Includes/RT/DDGISampling.hlsli"
+#endif
+
 void HitMesh(inout IndirectPayload payload, in BuiltInTriangleIntersectionAttributes attribs);
 
 [shader("closesthit")]
@@ -46,14 +51,22 @@ void HitMesh(inout IndirectPayload payload, in BuiltInTriangleIntersectionAttrib
     float4 vertexColor = Interpolate(v0.Color.unpack(), v1.Color.unpack(), v2.Color.unpack(), uvw);
 
     Texture2D baseTexture = Textures[NonUniformResourceIndex(material.BaseTexture)];
-    Texture2D effectTexture = Textures[NonUniformResourceIndex(material.EffectTexture)];
 
     float3 base = baseTexture.SampleLevel(BaseSampler, texCoord, 0).rgb;
-    float3 effect = effectTexture.SampleLevel(BaseSampler, texCoord, 0).rgb;
 
     // Lighting Shader
     float3 albedo = Color::GammaToLinear(base) * vertexColor.rgb;
-    float3 emissive = Color::GammaToLinear(effect) * material.EffectColor.rgb * material.EffectColor.a;
+
+    // Calculate emissive - check if real glow texture exists (indices 0-1 are fallback)
+    float3 emissive;
+    if (material.EffectTexture > 1) {
+        Texture2D effectTexture = Textures[NonUniformResourceIndex(material.EffectTexture)];
+        float3 effect = effectTexture.SampleLevel(BaseSampler, texCoord, 0).rgb;
+        emissive = Color::GammaToLinear(effect) * material.EffectColor.rgb * material.EffectColor.a;
+    } else {
+        // No glow texture - use EffectColor directly (rgb = color, a = multiplier)
+        emissive = material.EffectColor.rgb * material.EffectColor.a;
+    }
 
     #if !defined(LAMBERT)
     float3 viewDirection = normalize(-WorldRayDirection());
@@ -84,12 +97,22 @@ void HitMesh(inout IndirectPayload payload, in BuiltInTriangleIntersectionAttrib
         #endif
     }
     
-    // For DDGI probe tracing, skip indirect lighting - probes only gather direct lighting
-    // The probes themselves provide the indirect lighting, so recursive TraceRay is not needed
-    // This also prevents exceeding MaxRecursionDepth which would cause a GPU hang
-#if !defined(DDGI_PROBE)
+    // For DDGI probe tracing, add multi-bounce by sampling irradiance from OTHER probes
+    // This is the key to getting proper indirect lighting propagation
+#if defined(DDGI_PROBE)
+    // Sample irradiance from probe grid at hit position for multi-bounce GI
+    // Following NVIDIA's approach: radiance = direct + (albedo/PI * irradiance)
+    float3 viewDir = normalize(-WorldRayDirection());
+    float3 irradiance = SampleDDGIIrradiance(worldPosition, worldNormal, viewDir);
+
+    // Apply Lambertian BRDF (albedo/PI) and add to radiance
+    // Clamp albedo to prevent energy amplification (max 0.9 per NVIDIA recommendation)
+    float3 clampedAlbedo = min(albedo, float3(0.9f, 0.9f, 0.9f));
+    payload.color.rgb += (clampedAlbedo / Math::PI) * irradiance;
+#else
+    // Screen-space GI uses recursive ray tracing for indirect lighting
     uint currentDepth = payload.data.GetDepth();
-    
+
     if (currentDepth < MAX_DEPTH)
     {
         #if defined(LAMBERT)

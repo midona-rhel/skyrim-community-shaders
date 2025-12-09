@@ -76,7 +76,7 @@ void main()
     RayDesc ray;
     ray.Origin = probeWorldPosition;
     ray.Direction = probeRayDirection;
-    ray.TMin = 0.01f;  // Prevent self-intersection at probe position
+    ray.TMin = 0.f;  // Probes have no geometry, no self-intersection possible
     ray.TMax = volume.probeMaxRayDistance;
 
     // Trace the ray
@@ -88,9 +88,9 @@ void main()
     TraceRay(
         Scene,
         RAY_FLAG_NONE,
-        0xFF,  // Instance mask
+        0x01,  // Instance mask - only static geometry (bit 0), skips skinned meshes
         0,     // Hit group index
-        1,     // Hit group stride
+        0,     // Hit group stride (must be 0 for single hit group per ray type)
         0,     // Miss shader index
         ray,
         payload
