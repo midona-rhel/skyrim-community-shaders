@@ -563,9 +563,7 @@ struct Raytracing : public Feature
 
 	// DDGI (Probe-based GI)
 	eastl::unique_ptr<DX12::DDGIManager> ddgiManager = nullptr;
-	winrt::com_ptr<ID3D12StateObject> ddgiProbePipeline = nullptr;           // Probe ray tracing pipeline
-	eastl::unique_ptr<DX12::ShaderBindingTable> ddgiProbeSBT = nullptr;
-	eastl::unique_ptr<DX12::ResourceUpload> ddgiProbeSBTBuffer = nullptr;
+	winrt::com_ptr<ID3D12PipelineState> ddgiProbeTracePipeline = nullptr;    // Probe tracing compute pipeline (inline RT)
 	winrt::com_ptr<ID3D12StateObject> ddgiScreenPipeline = nullptr;          // Screen-space sampling pipeline
 	eastl::unique_ptr<DX12::ShaderBindingTable> ddgiScreenSBT = nullptr;
 	eastl::unique_ptr<DX12::ResourceUpload> ddgiScreenSBTBuffer = nullptr;

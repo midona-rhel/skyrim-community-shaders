@@ -2170,6 +2170,7 @@ void Raytracing::DrawRTGI()
 		frameBufferData->Effect = settings.Effect;
 		frameBufferData->Sky = settings.Sky;
 		frameBufferData->DDGIIntensity = ddgiManager ? ddgiManager->GetSettings().intensity : 0.5f;
+		frameBufferData->DDGISunBoost = ddgiManager ? ddgiManager->GetSettings().sunBoost : 2.0f;
 
 #ifdef SHARC
 		frameBufferData->SHARCScale = settings.SHARCScale / Util::Units::GAME_UNIT_TO_M;
@@ -2212,13 +2213,15 @@ void Raytracing::DrawRTGI()
 			ddgiManager->BeginFrame(commandList.get());
 
 			// ════════════════════════════════════════════════════════════════
-			// PHASE 1: Probe Ray Tracing
+			// PHASE 1: Probe Ray Tracing (Compute Shader with Inline RT)
 			// ════════════════════════════════════════════════════════════════
 
 			ddgiManager->BeginProbeTracing(commandList.get());
 
 			{
-				commandList->SetPipelineState1(ddgiProbePipeline.get());
+				// Use compute pipeline with inline ray tracing (RayQuery)
+				// No shader binding table needed - all hit processing is inlined
+				commandList->SetPipelineState(ddgiProbeTracePipeline.get());
 				commandList->SetComputeRootSignature(rootSignature.get());
 				commandList->SetDescriptorHeaps(1, &commonHeapPtr);
 
@@ -2231,24 +2234,22 @@ void Raytracing::DrawRTGI()
 				commandList->SetComputeRootConstantBufferView(6, frameBuffer->resource->GetGPUVirtualAddress());
 				commandList->SetComputeRootConstantBufferView(7, ddgiConstantsBuffer->resource->GetGPUVirtualAddress());
 
-				// Dispatch probe rays
+				// Get dispatch dimensions (same layout as RayData texture)
+				// width = numRays, height = probesPerPlane, depth = numPlanes
 				uint32_t dispatchWidth, dispatchHeight, dispatchDepth;
 				ddgiManager->GetRayDispatchDimensions(dispatchWidth, dispatchHeight, dispatchDepth);
 
 				logger::debug("[DDGI] Dispatch dimensions: {}x{}x{}", dispatchWidth, dispatchHeight, dispatchDepth);
 
-				D3D12_DISPATCH_RAYS_DESC probeDispatchDesc{};
-				probeDispatchDesc.Width = dispatchWidth;
-				probeDispatchDesc.Height = dispatchHeight;
-				probeDispatchDesc.Depth = dispatchDepth;
+				// Compute thread group counts
+				// ProbeTraceCS uses [numthreads(8, 8, 1)]
+				uint32_t groupsX = (dispatchWidth + 7) / 8;
+				uint32_t groupsY = (dispatchHeight + 7) / 8;
+				uint32_t groupsZ = dispatchDepth;
 
-				auto sbtBaseAddr = ddgiProbeSBTBuffer->resource->GetGPUVirtualAddress();
-				ddgiProbeSBT->FillDispatchShaderBindingTable(probeDispatchDesc, sbtBaseAddr);
-				ddgiProbeSBT->LogShaderBindingTable(sbtBaseAddr);
-
-				logger::debug("[DDGI] About to DispatchRays for probe tracing");
-				commandList->DispatchRays(&probeDispatchDesc);
-				logger::debug("[DDGI] DispatchRays completed (if you see this, dispatch didn't hang)");
+				logger::debug("[DDGI] About to Dispatch compute shader for probe tracing");
+				commandList->Dispatch(groupsX, groupsY, groupsZ);
+				logger::debug("[DDGI] Dispatch completed");
 			}
 
 			// ════════════════════════════════════════════════════════════════
@@ -3245,59 +3246,30 @@ void Raytracing::InitializeDDGI()
 	ddgiConstantsBuffer = eastl::make_unique<DX12::StructuredBufferUpload<rtxgi::DDGIVolumeDescGPUPacked>>(d3d12Device.get(), 1);
 	DX::ThrowIfFailed(ddgiConstantsBuffer->resource->SetName(L"DDGI Constants Buffer"));
 
-	// Compile DDGI probe tracing pipeline (uses Lambertian shading for diffuse-only)
+	// Compile DDGI probe tracing compute pipeline (uses inline ray tracing via RayQuery)
+	// This replaces the traditional RT pipeline with a simpler compute shader approach
 	{
-		winrt::com_ptr<IDxcBlob> probeRayGenBlob;
-		ShaderUtils::CompileShader(probeRayGenBlob, L"Data/Shaders/Raytracing/DDGI/ProbeTraceRGS.hlsl", { { L"LAMBERT", L"1" } });
+		winrt::com_ptr<IDxcBlob> probeTraceBlob;
+		ShaderUtils::CompileShader(probeTraceBlob, L"Data/Shaders/Raytracing/DDGI/ProbeTraceCS.hlsl",
+			{ { L"HLSL", L"1" }, { L"RTXGI_COORDINATE_SYSTEM", L"0" } }, L"cs_6_5", L"main");
 
-		winrt::com_ptr<IDxcBlob> missBlob, closestHitBlob, anyHitBlob;
-		ShaderUtils::CompileShader(missBlob, L"Data/Shaders/Raytracing/GI/Miss.hlsl", { { L"LAMBERT", L"1" } });
-		ShaderUtils::CompileShader(closestHitBlob, L"Data/Shaders/Raytracing/GI/ClosestHit.hlsl", { { L"LAMBERT", L"1" }, { L"DDGI_PROBE", L"1" } });
-		ShaderUtils::CompileShader(anyHitBlob, L"Data/Shaders/Raytracing/GI/AnyHit.hlsl");
-
-		winrt::com_ptr<IDxcBlob> shadowMissBlob;
-		ShaderUtils::CompileShader(shadowMissBlob, L"Data/Shaders/Raytracing/GI/ShadowMiss.hlsl");
-
-		DX12::RTPipelineBuilder pipelineBuilder;
-
-		pipelineBuilder.AddRayGenLib(probeRayGenBlob.get(), L"ProbeRayGeneration");
-		pipelineBuilder.AddMissLib(missBlob.get(), L"IndirectMiss");
-		pipelineBuilder.AddMissLib(shadowMissBlob.get(), L"ShadowMiss");
-		pipelineBuilder.AddHitLib(closestHitBlob.get(), L"IndirectClosestHit");
-		pipelineBuilder.AddAnyHitLib(anyHitBlob.get(), L"IndirectAnyHit");
-
-		pipelineBuilder.AddHitGroup(L"IndirectHitGroup", L"IndirectClosestHit", L"IndirectAnyHit");
-		pipelineBuilder.AddHitGroup(L"ShadowHitGroup");
-
-		pipelineBuilder.AddShaderConfig(24, 8);  // 24 bytes: float4 color (16) + PayloadData (4) + hitKind (4)
-		pipelineBuilder.AddGlobalRootSignature(rootSignature.get());
-		pipelineBuilder.AddPipelineConfig(2);  // Lower depth for probe tracing
-
-		auto desc = pipelineBuilder.MakeStateObjectDesc();
-		HRESULT hr = d3d12Device->CreateStateObject(desc, IID_PPV_ARGS(&ddgiProbePipeline));
-		if (FAILED(hr)) {
-			logger::error("[DDGI] Failed to create probe pipeline: {}", hr);
+		if (!probeTraceBlob || probeTraceBlob->GetBufferSize() == 0) {
+			logger::error("[DDGI] Failed to compile probe trace compute shader");
 			return;
 		}
-		DX::ThrowIfFailed(ddgiProbePipeline->SetName(L"DDGI Probe Pipeline"));
 
-		// Create SBT for probe tracing
-		winrt::com_ptr<ID3D12StateObjectProperties> props;
-		ddgiProbePipeline->QueryInterface(props.put());
+		D3D12_COMPUTE_PIPELINE_STATE_DESC computeDesc = {};
+		computeDesc.pRootSignature = rootSignature.get();
+		computeDesc.CS = { probeTraceBlob->GetBufferPointer(), probeTraceBlob->GetBufferSize() };
 
-		ddgiProbeSBT = eastl::make_unique<DX12::ShaderBindingTable>(pipelineBuilder.CreateShaderBindingTable(props.get()));
-		auto sbtSize = ddgiProbeSBT->GetTotalSize();
+		HRESULT hr = d3d12Device->CreateComputePipelineState(&computeDesc, IID_PPV_ARGS(ddgiProbeTracePipeline.put()));
+		if (FAILED(hr)) {
+			logger::error("[DDGI] Failed to create probe trace compute pipeline: 0x{:08X}", static_cast<unsigned int>(hr));
+			return;
+		}
+		ddgiProbeTracePipeline->SetName(L"DDGI Probe Trace Compute Pipeline");
 
-		ddgiProbeSBTBuffer = eastl::make_unique<DX12::ResourceUpload>(d3d12Device.get(), sbtSize);
-		ddgiProbeSBTBuffer->SetName(L"DDGI Probe SBT");
-
-		std::vector<uint8_t> sbtData(sbtSize);
-		ddgiProbeSBT->Build(sbtData.data());
-		ddgiProbeSBTBuffer->Update(sbtData.data(), sbtSize);
-		ddgiProbeSBTBuffer->Upload(commandList.get());
-		ddgiProbeSBTBuffer->TransitionBarrier(commandList.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
-		logger::info("[DDGI] Probe tracing pipeline created successfully");
+		logger::info("[DDGI] Probe tracing compute pipeline created successfully (inline RT)");
 	}
 
 	// Compile DDGI screen-space sampling pipeline

@@ -77,15 +77,15 @@ namespace DX12
 			float maxRayDistance = 10000.0f;  ///< Maximum ray travel distance in game units
 
 			// Quality - Temporal Stability
-			float hysteresis = 0.97f;          ///< Blend factor for new vs old data (0.97 = 97% old, 3% new)
+			float hysteresis = 0.94f;          ///< Blend factor for new vs old data (0.94 = 94% old, 6% new - faster convergence)
 			float irradianceThreshold = 0.25f; ///< Minimum change to trigger probe update
 			float brightnessThreshold = 0.10f; ///< Maximum brightness change per frame
 
 			// Bias - Artifact Prevention
 			// Values should be 10-20% of probe spacing to prevent self-shadowing
-			// Increased from 14.0f to reduce light leaking through thin geometry
-			float viewBias = 28.0f;    ///< Offset along view direction when sampling
-			float normalBias = 28.0f;  ///< Offset along surface normal when sampling
+			// Using lower end (10%) for less darkening while still preventing artifacts
+			float viewBias = 14.0f;    ///< Offset along view direction when sampling (~10% of spacing)
+			float normalBias = 10.0f;  ///< Offset along surface normal when sampling (~7% of spacing)
 
 			// Feature Toggles
 			bool probeRelocationEnabled = false;     ///< Move probes away from geometry (can cause light bleed)
@@ -95,11 +95,12 @@ namespace DX12
 			// Probe Relocation/Classification Thresholds
 			float probeMinFrontfaceDistance = 10.0f;       ///< Minimum distance from surfaces for relocation
 			float probeRandomRayBackfaceThreshold = 0.25f; ///< Backface ratio threshold for blending
-			float probeFixedRayBackfaceThreshold = 0.5f;   ///< Backface ratio threshold for classification (increased from 0.25)
+			float probeFixedRayBackfaceThreshold = 0.75f;  ///< Backface ratio threshold for classification (24 of 32 fixed rays needed)
 
 			// Scrolling
 			float scrollForwardBias = 200.0f;  ///< Offset volume center ahead of camera (game units)
 			float intensity = 1.0f;            ///< Final GI contribution multiplier (0.0 - 2.0)
+			float sunBoost = 2.0f;             ///< Multiplier for directional light in probes (counters Frame.Diffuse dampening)
 
 			bool showProbes = false;  ///< Debug visualization of probe positions
 		};
@@ -507,7 +508,6 @@ namespace DX12
 		winrt::com_ptr<ID3D12PipelineState> m_variabilityExtraReductionPSO;
 		winrt::com_ptr<ID3D12PipelineState> m_probeVisualizationPSO;
 
-		winrt::com_ptr<ID3D12StateObject> m_probeTraceStateObject;  ///< DXR state object (unused currently)
 		winrt::com_ptr<ID3D12RootSignature> m_rootSignature;       ///< SDK compute root signature
 
 		// Descriptor Heaps

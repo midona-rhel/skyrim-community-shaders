@@ -21,13 +21,25 @@
 #include "Raytracing/DDGI/Irradiance.hlsl"
 
 // DDGI Resources - bound in space4 to avoid conflicts with existing bindings
+// These are conditionally declared to allow inclusion from ProbeTraceCS.hlsl
+// which may have already declared compatible resources with different names
+#ifndef DDGI_PROBE_IRRADIANCE_DECLARED
 Texture2DArray<float4> DDGIProbeIrradiance     : register(t0, space4);
+#endif
+#ifndef DDGI_PROBE_DISTANCE_DECLARED
 Texture2DArray<float4> DDGIProbeDistance       : register(t1, space4);
+#endif
+#ifndef DDGI_PROBE_DATA_DECLARED
 Texture2DArray<float4> DDGIProbeData           : register(t2, space4);
+#endif
+#ifndef DDGI_BILINEAR_SAMPLER_DECLARED
 SamplerState DDGIBilinearSampler               : register(s1, space4);
+#endif
 
 // Volume constants (packed format for efficiency)
+#ifndef DDGI_VOLUME_CONSTANTS_DECLARED
 ConstantBuffer<DDGIVolumeDescGPUPacked> DDGIVolumeConstants : register(b1, space4);
+#endif
 
 /**
  * Sample diffuse irradiance from DDGI probe volume.

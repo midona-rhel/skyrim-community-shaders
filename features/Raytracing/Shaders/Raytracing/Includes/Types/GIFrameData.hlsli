@@ -24,12 +24,12 @@ alignas(16)
 	float Effect;
 	float Sky;
     float DDGIIntensity;  // DDGI contribution scale (0.0 - 2.0)
+    float DDGISunBoost;   // Directional light multiplier for DDGI probes (counters Frame.Diffuse dampening)
     #ifdef SHARC
     float SHARCScale;
     #else
     uint Pad0;
     #endif
-    uint Pad1;
 };
 #ifdef __cplusplus
 static_assert(sizeof(GIFrameData) % 256 == 0);
